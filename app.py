@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, session
-from flask_pymongo import PyMongo
+from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 import os
@@ -8,11 +8,29 @@ app = Flask(__name__)
 
 # 設置 Flask 配置
 app.config['SECRET_KEY'] = 'your_secret_key'  # 更改為你的密鑰
-app.config['MONGO_URI'] = 'mongodb://localhost:27017/your_database'  # 更改為你的 MongoDB 連接字符串
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'  # 使用 SQLite 數據庫
 app.config['UPLOAD_FOLDER'] = 'uploads'  # 設置上傳文件的文件夾
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 限制上傳文件的大小
 
-mongo = PyMongo(app)
+db = SQLAlchemy(app)
+
+# 定義用戶模型
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    password = db.Column(db.String(120), nullable=False)
+
+# 定義儲存庫模型
+class Repository(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(80), nullable=False)
+    description = db.Column(db.String(200))
+    owner = db.Column(db.String(80), nullable=False)
+    files = db.Column(db.PickleType, default=[])
+
+# 創建數據庫
+with app.app_context():
+    db.create_all()
 
 # 檢查文件擴展名
 def allowed_file(filename):
@@ -24,9 +42,9 @@ def login():
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
-        user = mongo.db.users.find_one({"username": username})
+        user = User.query.filter_by(username=username).first()
         
-        if user and check_password_hash(user['password'], password):
+        if user and check_password_hash(user.password, password):
             session['username'] = username
             flash('登入成功！', 'success')
             return redirect(url_for('home'))
@@ -41,13 +59,15 @@ def register():
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
-        existing_user = mongo.db.users.find_one({"username": username})
+        existing_user = User.query.filter_by(username=username).first()
 
         if existing_user:
             flash('用戶名已存在', 'error')
         else:
             hash_password = generate_password_hash(password)
-            mongo.db.users.insert_one({"username": username, "password": hash_password})
+            new_user = User(username=username, password=hash_password)
+            db.session.add(new_user)
+            db.session.commit()
             flash('註冊成功！請登入', 'success')
             return redirect(url_for('login'))
 
@@ -64,19 +84,15 @@ def create_repository():
     if request.method == 'POST':
         repo_name = request.form['name']
         description = request.form['description']
-        existing_repo = mongo.db.repositories.find_one({"name": repo_name, "owner": session['username']})
+        existing_repo = Repository.query.filter_by(name=repo_name, owner=session['username']).first()
 
         if existing_repo:
             flash('儲存庫名稱已存在', 'error')
             return redirect(url_for('create_repository'))
 
-        new_repo = {
-            "name": repo_name,
-            "description": description,
-            "owner": session['username'],
-            "files": []
-        }
-        mongo.db.repositories.insert_one(new_repo)
+        new_repo = Repository(name=repo_name, description=description, owner=session['username'])
+        db.session.add(new_repo)
+        db.session.commit()
         flash('儲存庫創建成功', 'success')
         return redirect(url_for('home'))
     
@@ -85,7 +101,7 @@ def create_repository():
 # 顯示文件列表
 @app.route('/repository/<username>/<repo_name>', methods=['GET', 'POST'])
 def repository(username, repo_name):
-    repo = mongo.db.repositories.find_one({"owner": username, "name": repo_name})
+    repo = Repository.query.filter_by(owner=username, name=repo_name).first()
     if not repo:
         flash('儲存庫不存在', 'error')
         return redirect(url_for('home'))
@@ -95,12 +111,13 @@ def repository(username, repo_name):
         if file and allowed_file(file.filename):
             filename = secure_filename(file.filename)
             file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-            mongo.db.repositories.update_one({"_id": repo['_id']}, {"$push": {"files": filename}})
+            repo.files.append(filename)
+            db.session.commit()
             flash('文件上傳成功', 'success')
         else:
             flash('無效的文件類型', 'error')
 
-    return render_template('files.html', files=repo['files'], repo_name=repo_name)
+    return render_template('files.html', files=repo.files, repo_name=repo_name)
 
 # 下載文件
 @app.route('/download/<repo_name>/<filename>')
@@ -115,4 +132,4 @@ def logout():
     return redirect(url_for('home'))
 
 if __name__ == '__main__':
-    app.run(debug=True,port=10000, host='0.0.0.0')
+    app.run(debug=True, port=10000, host='0.0.0.0')
