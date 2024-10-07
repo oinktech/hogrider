@@ -14,18 +14,37 @@ app.config['ALLOWED_EXTENSIONS'] = {'py', 'txt', 'md', 'html', 'js', 'css'}
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
 
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        existing_user = mongo.db.users.find_one({"username": username})
+        
+        if existing_user:
+            flash('用戶名已被使用', 'error')
+            return redirect(url_for('register'))
+        
+        mongo.db.users.insert_one({"username": username, "password": password})
+        flash('註冊成功，請登入', 'success')
+        return redirect(url_for('login'))
+    
+    return render_template('register.html')
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
         user = mongo.db.users.find_one({"username": username})
+        
         if user and user['password'] == password:
             session['username'] = user['username']
             flash('登入成功', 'success')
             return redirect(url_for('home'))
         else:
             flash('登入失敗，請檢查帳號密碼', 'error')
+    
     return render_template('login.html')
 
 @app.route('/logout')
@@ -49,6 +68,7 @@ def create_repository():
         repo_name = request.form['name']
         description = request.form['description']
         existing_repo = mongo.db.repositories.find_one({"name": repo_name, "owner": session['username']})
+        
         if existing_repo:
             flash('儲存庫名稱已存在', 'error')
             return redirect(url_for('create_repository'))
@@ -62,6 +82,7 @@ def create_repository():
         mongo.db.repositories.insert_one(new_repo)
         flash('儲存庫創建成功', 'success')
         return redirect(url_for('home'))
+    
     return render_template('create_repository.html')
 
 @app.route('/repository/<username>/<repo_name>', methods=['GET', 'POST'])
